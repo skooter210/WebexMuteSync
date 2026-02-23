@@ -81,6 +81,10 @@ cat > "$BUILD_DIR/$APP_NAME.app/Contents/Info.plist" << 'PLIST'
     <string>AppIcon</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>WebexMuteSync checks if your Anker PowerConf S3 is connected via Bluetooth to recommend switching to USB for LED control.</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>WebexMuteSync reads Webex mute button state to sync with your speakerphone LED.</string>
 </dict>
 </plist>
 PLIST

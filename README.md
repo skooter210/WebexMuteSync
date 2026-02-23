@@ -11,6 +11,10 @@ A macOS menu bar app that syncs Webex mute state with the Anker PowerConf S3 spe
 - **Incoming call alert** — Detects incoming Webex calls, flashes the Anker's green ring LED, and animates a phone icon in the menu bar.
 - **Fast polling** — Cached Accessibility API references for sub-second mute state detection during active meetings.
 
+## Install
+
+Download the latest [release](https://github.com/skooter210/WebexMuteSync/releases/latest), extract the zip, and move `WebexMuteSync.app` to `/Applications`. The app is signed and notarized — no Gatekeeper warnings.
+
 ## Requirements
 
 - macOS 13+
@@ -18,17 +22,23 @@ A macOS menu bar app that syncs Webex mute state with the Anker PowerConf S3 spe
 - Webex desktop app (classic or newer)
 - Accessibility permission (prompted on first launch)
 
-## Build
+## Build from Source
 
 ```bash
 cd WebexMuteSync
 swift build
+.build/debug/WebexMuteSync
 ```
 
-## Run
+To build a signed and notarized release `.app` bundle:
 
 ```bash
-.build/debug/WebexMuteSync
+# Requires Apple Developer ID — see scripts/signing.env.example
+cd WebexMuteSync
+./scripts/build-release.sh
+
+# Without a Developer account (ad-hoc signed):
+./scripts/build-release.sh --skip-notarize
 ```
 
 The app runs as a menu bar accessory (no dock icon). Click the mic icon to see status, or quit from the dropdown menu.

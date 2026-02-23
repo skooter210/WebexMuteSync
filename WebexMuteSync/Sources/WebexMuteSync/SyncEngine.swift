@@ -64,6 +64,9 @@ final class SyncEngine {
     /// Whether the ring LED is currently on
     private var ringLEDActive: Bool = false
 
+    /// Timer to verify sync after cooldown expires
+    private var postCooldownTimer: DispatchSourceTimer?
+
     /// Count consecutive noMeeting/notRunning states before clearing LED
     /// Prevents flicker from cache staleness during UI refreshes
     private var noMeetingCount: Int = 0
@@ -176,6 +179,33 @@ final class SyncEngine {
         // Set LED to match desired state
         hidDevice.setMuteLED(wantsMuted)
         lastLEDState = wantsMuted
+
+        // Schedule a verification after cooldown to catch any drift
+        schedulePostCooldownVerification()
+    }
+
+    /// Re-syncs LED with actual Webex state after the cooldown window expires
+    private func schedulePostCooldownVerification() {
+        postCooldownTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + Config.buttonPressCooldown + 0.3)
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            let state = self.webexMonitor.currentState
+            let shouldBeMuted: Bool?
+            switch state {
+            case .muted: shouldBeMuted = true
+            case .unmuted: shouldBeMuted = false
+            default: shouldBeMuted = nil
+            }
+            if let shouldBeMuted = shouldBeMuted, shouldBeMuted != self.lastLEDState {
+                self.hidDevice.setMuteLED(shouldBeMuted)
+                self.lastLEDState = shouldBeMuted
+            }
+            self.updateStatus()
+        }
+        timer.resume()
+        postCooldownTimer = timer
     }
 }
 

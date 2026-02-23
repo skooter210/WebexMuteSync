@@ -18,7 +18,7 @@ protocol HIDDeviceDelegate: AnyObject {
 /// LED control requires setting individual HID elements via `IOHIDDeviceSetValue`:
 /// - The device requires Off-Hook (0x17) = ON to simulate an active call
 /// - Then Mute (0x09) = ON/OFF controls the red mute LED
-/// - Ring (0x18) controls blinking green (not used)
+/// - Ring (0x18) controls blinking green for incoming calls
 ///
 /// Mute button input arrives on Report ID 2, bit 3 (Phone Mute usage 0x2F).
 final class HIDDevice {
@@ -86,7 +86,7 @@ final class HIDDevice {
 
         let result = IOHIDManagerOpen(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
         if result != kIOReturnSuccess {
-            print("[HID] Failed to open HID manager: \(result)")
+            print("[HID] Error: Failed to open HID manager: \(result)")
         }
     }
 
@@ -120,7 +120,6 @@ final class HIDDevice {
             return false
         }
         guard let muteEl = muteElement, let offHookEl = offHookElement else {
-            print("[HID] Output elements not found")
             return false
         }
 
@@ -131,7 +130,6 @@ final class HIDDevice {
             if r == kIOReturnSuccess {
                 offHookActive = true
             } else {
-                print("[HID] Failed to set Off-Hook: \(r)")
                 return false
             }
         }
@@ -139,12 +137,7 @@ final class HIDDevice {
         // Set Mute LED
         let muteVal = IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, muteEl, 0, muted ? 1 : 0)
         let result = IOHIDDeviceSetValue(device, muteEl, muteVal)
-
-        if result != kIOReturnSuccess {
-            print("[HID] Failed to set mute LED: \(result)")
-            return false
-        }
-        return true
+        return result == kIOReturnSuccess
     }
 
     /// Clears Off-Hook state (call ended). Turns off mute LED as a side effect.
@@ -165,7 +158,6 @@ final class HIDDevice {
     func setRingLED(_ ringing: Bool) -> Bool {
         guard let device = device, isUSB else { return false }
         guard let ringEl = ringElement, let offHookEl = offHookElement else {
-            print("[HID] Ring element not found")
             return false
         }
 
@@ -176,35 +168,22 @@ final class HIDDevice {
             if r == kIOReturnSuccess {
                 offHookActive = true
             } else {
-                print("[HID] Failed to set Off-Hook for ring: \(r)")
                 return false
             }
         }
 
         let ringVal = IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, ringEl, 0, ringing ? 1 : 0)
         let result = IOHIDDeviceSetValue(device, ringEl, ringVal)
-        if result != kIOReturnSuccess {
-            print("[HID] Failed to set ring LED: \(result)")
-            return false
-        }
-        return true
+        return result == kIOReturnSuccess
     }
 
     // MARK: - Device Events
 
     private func handleDeviceConnected(_ hidDevice: IOHIDDevice) {
-        let usagePage = IOHIDDeviceGetProperty(hidDevice, kIOHIDPrimaryUsagePageKey as CFString) as? Int ?? -1
-        let usage = IOHIDDeviceGetProperty(hidDevice, kIOHIDPrimaryUsageKey as CFString) as? Int ?? -1
-        print("[HID] Device connected — UsagePage=0x\(String(usagePage, radix: 16)) Usage=0x\(String(usage, radix: 16))")
-
         device = hidDevice
 
         // Determine if connected via USB by checking transport property
         isUSB = checkIsUSB(hidDevice)
-
-        if !isUSB {
-            print("[HID] Device connected via Bluetooth — LED control not available")
-        }
 
         // Find output elements for LED control
         cacheOutputElements(hidDevice)
@@ -233,7 +212,6 @@ final class HIDDevice {
     }
 
     private func handleDeviceDisconnected(_ hidDevice: IOHIDDevice) {
-        print("[HID] Device disconnected")
         if device === hidDevice {
             device = nil
             isUSB = false
@@ -253,11 +231,6 @@ final class HIDDevice {
     private func handleInputReport(reportID: UInt32, report: UnsafeMutablePointer<UInt8>?, length: CFIndex) {
         guard let report = report else { return }
 
-        // Log ALL reports for debugging
-        let bytes = (0..<length).map { String(format: "%02X", report[$0]) }.joined(separator: " ")
-        let ts = String(format: "%.3f", Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 1000))
-        print("[HID] t=\(ts) report ID=\(reportID) data=[\(bytes)]")
-
         // Only process telephony input reports (Report ID 2)
         guard length > Config.muteButtonByteIndex else { return }
         if Config.muteButtonReportID != 0 && reportID != UInt32(Config.muteButtonReportID) {
@@ -272,7 +245,6 @@ final class HIDDevice {
         // so we must detect transitions rather than treating every report as a press.
         if muteActive != lastMuteBitState {
             lastMuteBitState = muteActive
-            print("[HID] Mute toggle: \(muteActive ? "ON (user wants muted)" : "OFF (user wants unmuted)")")
             DispatchQueue.main.async { [weak self] in
                 self?.delegate?.hidDeviceMuteToggled(wantsMuted: muteActive)
             }
@@ -285,7 +257,6 @@ final class HIDDevice {
         guard let elements = IOHIDDeviceCopyMatchingElements(
             hidDevice, nil, IOOptionBits(kIOHIDOptionsTypeNone)
         ) as? [IOHIDElement] else {
-            print("[HID] Failed to enumerate device elements")
             return
         }
 
@@ -302,12 +273,6 @@ final class HIDDevice {
             default:
                 break
             }
-        }
-
-        if offHookElement != nil && muteElement != nil {
-            print("[HID] Found Off-Hook, Mute, and Ring LED elements (ring=\(ringElement != nil))")
-        } else {
-            print("[HID] Warning: missing LED elements (offHook=\(offHookElement != nil), mute=\(muteElement != nil), ring=\(ringElement != nil))")
         }
     }
 

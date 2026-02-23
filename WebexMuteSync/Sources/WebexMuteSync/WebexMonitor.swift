@@ -50,7 +50,7 @@ final class WebexMonitor {
         if let button = cachedMuteButton {
             let result = AXUIElementPerformAction(button, kAXPressAction as CFString)
             if result == .success {
-                print("[Webex] Pressed mute button via cached ref")
+                // print("[Webex] Pressed mute button via cached ref")
                 return
             }
             // Cache stale, clear it
@@ -59,7 +59,7 @@ final class WebexMonitor {
 
         // Find button fresh
         guard let pid = findWebexPID() else {
-            print("[Webex] Cannot toggle mute — Webex not running")
+            // print("[Webex] Cannot toggle mute — Webex not running")
             return
         }
 
@@ -67,9 +67,9 @@ final class WebexMonitor {
             cachedMuteButton = button
             let result = AXUIElementPerformAction(button, kAXPressAction as CFString)
             if result == .success {
-                print("[Webex] Pressed mute button via fresh lookup")
+                // print("[Webex] Pressed mute button via fresh lookup")
             } else {
-                print("[Webex] Failed to press mute button: \(result.rawValue)")
+                // print("[Webex] Failed to press mute button: \(result.rawValue)")
             }
             return
         }
@@ -81,7 +81,7 @@ final class WebexMonitor {
         keyUp?.flags = Config.muteShortcutModifiers
         keyDown?.postToPid(pid)
         keyUp?.postToPid(pid)
-        print("[Webex] Fallback: sent Cmd+Shift+M to Webex")
+        // print("[Webex] Fallback: sent Cmd+Shift+M to Webex")
     }
 
     // MARK: - Polling
@@ -97,9 +97,7 @@ final class WebexMonitor {
         let newState = detectState()
 
         if newState != currentState {
-            let oldState = currentState
             currentState = newState
-            print("[Webex] State changed: \(oldState) → \(newState)")
             delegate?.webexMonitor(self, didDetectState: newState)
         }
 

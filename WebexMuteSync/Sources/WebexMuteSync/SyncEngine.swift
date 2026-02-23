@@ -117,16 +117,12 @@ final class SyncEngine {
         guard hidDevice.isConnected, hidDevice.isUSB else { return }
 
         // Don't update LED during cooldown (button press already handled it)
-        guard !isInCooldown else {
-            print("[Sync] Skipping LED update during cooldown")
-            return
-        }
+        guard !isInCooldown else { return }
 
         // Stop ring LED when transitioning away from ringing
         if state != .ringing && ringLEDActive {
             hidDevice.setRingLED(false)
             ringLEDActive = false
-            print("[Sync] Webex→Device: ring LED OFF")
         }
 
         switch state {
@@ -135,21 +131,18 @@ final class SyncEngine {
             if !ringLEDActive {
                 hidDevice.setRingLED(true)
                 ringLEDActive = true
-                print("[Sync] Webex→Device: ring LED ON (incoming call)")
             }
         case .muted:
             noMeetingCount = 0
             if lastLEDState != true {
                 hidDevice.setMuteLED(true)
                 lastLEDState = true
-                print("[Sync] Webex→Device: LED ON (muted)")
             }
         case .unmuted:
             noMeetingCount = 0
             if lastLEDState != false {
                 hidDevice.setMuteLED(false)
                 lastLEDState = false
-                print("[Sync] Webex→Device: LED OFF (unmuted)")
             }
         case .noMeeting, .notRunning:
             noMeetingCount += 1
@@ -159,7 +152,6 @@ final class SyncEngine {
                 if lastLEDState != nil && lastLEDState != false {
                     hidDevice.clearCallState()
                     lastLEDState = false
-                    print("[Sync] Webex→Device: call state cleared (no meeting/not running)")
                 }
             }
         }
@@ -171,27 +163,19 @@ final class SyncEngine {
         lastButtonPressTime = Date()
 
         let state = webexMonitor.currentState
-        print("[Sync] Device toggle: wants \(wantsMuted ? "muted" : "unmuted"), Webex is \(state)")
 
-        guard state == .muted || state == .unmuted else {
-            print("[Sync] Device toggle ignored — no active meeting")
-            return
-        }
+        guard state == .muted || state == .unmuted else { return }
 
         let currentlyMuted = (state == .muted)
 
         // Only press the button if Webex isn't already in the desired state
         if wantsMuted != currentlyMuted {
             webexMonitor.toggleMute()
-            print("[Sync] Toggled Webex to \(wantsMuted ? "muted" : "unmuted")")
-        } else {
-            print("[Sync] Webex already \(wantsMuted ? "muted" : "unmuted"), no toggle needed")
         }
 
         // Set LED to match desired state
         hidDevice.setMuteLED(wantsMuted)
         lastLEDState = wantsMuted
-        print("[Sync] LED \(wantsMuted ? "ON" : "OFF")")
     }
 }
 
@@ -208,14 +192,12 @@ extension SyncEngine: WebexMonitorDelegate {
 
 extension SyncEngine: HIDDeviceDelegate {
     func hidDeviceDidConnect() {
-        print("[Sync] Device connected")
         updateStatus()
         // Sync current Webex state to the newly connected device
         syncWebexStateToDevice(webexMonitor.currentState)
     }
 
     func hidDeviceDidDisconnect() {
-        print("[Sync] Device disconnected")
         lastLEDState = nil
         ringLEDActive = false
         updateStatus()

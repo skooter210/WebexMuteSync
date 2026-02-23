@@ -20,12 +20,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         syncEngine.delegate = self
         syncEngine.start()
 
-        print("[App] WebexMuteSync started")
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         syncEngine.stop()
-        print("[App] WebexMuteSync stopped")
     }
 }
 

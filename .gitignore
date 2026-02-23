@@ -1,3 +1,4 @@
 .build/
+.build-release/
 .swiftpm/
 .DS_Store

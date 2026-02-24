@@ -7,7 +7,7 @@ enum SyncStatus: Equatable {
     case muted             // In meeting, muted
     case unmuted           // In meeting, unmuted
     case ringing           // Incoming call
-    case deviceDisconnected // Anker not connected
+    case deviceDisconnected // Speakerphone not connected
     case webexNotRunning   // Webex not running
     case usbRequired       // Device connected via Bluetooth, need USB
 }
@@ -15,10 +15,12 @@ enum SyncStatus: Equatable {
 /// Delegate for sync status changes (used by MenuBarController)
 protocol SyncEngineDelegate: AnyObject {
     func syncEngine(_ engine: SyncEngine, didUpdateStatus status: SyncStatus)
-    func syncEngine(_ engine: SyncEngine, deviceConnected: Bool, isUSB: Bool)
+    func syncEngine(_ engine: SyncEngine, deviceConnected: Bool, isUSB: Bool, productName: String?)
+    func syncEngine(_ engine: SyncEngine, didUpdateVideoState state: WebexVideoState)
+    func syncEngine(_ engine: SyncEngine, deviceProfileStatus isKnown: Bool, profile: DeviceProfile?)
 }
 
-/// Bidirectional sync coordinator between Webex mute state and Anker HID LED.
+/// Bidirectional sync coordinator between Webex mute state and speakerphone HID LED.
 ///
 /// - Webex → Device: When WebexMonitor detects a state change, updates the LED.
 /// - Device → Webex: When HIDDevice reports a button press, toggles Webex mute
@@ -38,12 +40,12 @@ final class SyncEngine {
                 // Update device info based on status
                 switch status {
                 case .deviceDisconnected:
-                    delegate?.syncEngine(self, deviceConnected: false, isUSB: false)
+                    delegate?.syncEngine(self, deviceConnected: false, isUSB: false, productName: nil)
                 case .usbRequired:
-                    delegate?.syncEngine(self, deviceConnected: true, isUSB: false)
+                    delegate?.syncEngine(self, deviceConnected: true, isUSB: false, productName: hidDevice.productName)
                 default:
                     if hidDevice.isConnected {
-                        delegate?.syncEngine(self, deviceConnected: true, isUSB: hidDevice.isUSB)
+                        delegate?.syncEngine(self, deviceConnected: true, isUSB: hidDevice.isUSB, productName: hidDevice.productName)
                     }
                 }
             }
@@ -72,6 +74,9 @@ final class SyncEngine {
     private var noMeetingCount: Int = 0
     private let noMeetingThreshold: Int = 5
 
+    /// Whether sync is paused (e.g. while test panel is open)
+    private(set) var isPaused: Bool = false
+
     // MARK: - Lifecycle
 
     func start() {
@@ -87,6 +92,35 @@ final class SyncEngine {
     func stop() {
         webexMonitor.stop()
         hidDevice.stop()
+    }
+
+    // MARK: - Pause / Resume (for test panel)
+
+    /// Pause sync so the test panel can control the device directly.
+    func pauseSync() {
+        isPaused = true
+        print("[Sync] Paused for device configuration")
+    }
+
+    /// Resume normal sync after the test panel closes.
+    func resumeSync() {
+        isPaused = false
+        print("[Sync] Resumed")
+        // Re-sync current state to device
+        syncWebexStateToDevice(webexMonitor.currentState)
+        updateStatus()
+    }
+
+    // MARK: - Public Actions
+
+    /// Toggle Webex audio mute from the menu bar
+    func toggleWebexMute() {
+        webexMonitor.toggleMute()
+    }
+
+    /// Toggle Webex video from the menu bar
+    func toggleWebexVideo() {
+        webexMonitor.toggleVideo()
     }
 
     // MARK: - Status
@@ -118,6 +152,7 @@ final class SyncEngine {
 
     private func syncWebexStateToDevice(_ state: WebexState) {
         guard hidDevice.isConnected, hidDevice.isUSB else { return }
+        guard !isPaused else { return }
 
         // Don't update LED during cooldown (button press already handled it)
         guard !isInCooldown else { return }
@@ -163,6 +198,8 @@ final class SyncEngine {
     // MARK: - Sync: Device → Webex
 
     private func handleDeviceMuteToggle(wantsMuted: Bool) {
+        guard !isPaused else { return }
+
         lastButtonPressTime = Date()
 
         let state = webexMonitor.currentState
@@ -216,6 +253,10 @@ extension SyncEngine: WebexMonitorDelegate {
         syncWebexStateToDevice(state)
         updateStatus()
     }
+
+    func webexMonitor(_ monitor: WebexMonitor, didDetectVideoState state: WebexVideoState) {
+        delegate?.syncEngine(self, didUpdateVideoState: state)
+    }
 }
 
 // MARK: - HIDDeviceDelegate
@@ -225,12 +266,18 @@ extension SyncEngine: HIDDeviceDelegate {
         updateStatus()
         // Sync current Webex state to the newly connected device
         syncWebexStateToDevice(webexMonitor.currentState)
+        // Notify delegate about profile status
+        delegate?.syncEngine(self,
+                             deviceProfileStatus: hidDevice.isKnownProfile,
+                             profile: hidDevice.activeProfile)
     }
 
     func hidDeviceDidDisconnect() {
         lastLEDState = nil
         ringLEDActive = false
         updateStatus()
+        // Notify delegate that no profile is active
+        delegate?.syncEngine(self, deviceProfileStatus: true, profile: nil)
     }
 
     func hidDeviceMuteToggled(wantsMuted: Bool) {

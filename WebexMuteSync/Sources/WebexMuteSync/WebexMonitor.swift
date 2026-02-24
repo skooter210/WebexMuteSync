@@ -10,9 +10,17 @@ enum WebexState: Equatable {
     case unmuted
 }
 
+/// Represents the current video state of Webex
+enum WebexVideoState: Equatable {
+    case unknown
+    case videoOn
+    case videoOff
+}
+
 /// Delegate protocol for Webex state changes
 protocol WebexMonitorDelegate: AnyObject {
     func webexMonitor(_ monitor: WebexMonitor, didDetectState state: WebexState)
+    func webexMonitor(_ monitor: WebexMonitor, didDetectVideoState state: WebexVideoState)
 }
 
 /// Monitors Webex mute state via macOS Accessibility API (AXUIElement).
@@ -22,12 +30,17 @@ final class WebexMonitor {
     weak var delegate: WebexMonitorDelegate?
 
     private(set) var currentState: WebexState = .notRunning
+    private(set) var currentVideoState: WebexVideoState = .unknown
     private var pollTimer: Timer?
 
     /// Cached mute button element — avoids full tree walk on every poll
     private var cachedMuteButton: AXUIElement?
     private var cachedWebexPID: pid_t?
     private var cacheFailCount: Int = 0
+
+    /// Cached video button element
+    private var cachedVideoButton: AXUIElement?
+    private var videoCacheFailCount: Int = 0
 
     // MARK: - Lifecycle
 
@@ -84,6 +97,34 @@ final class WebexMonitor {
         // print("[Webex] Fallback: sent Cmd+Shift+M to Webex")
     }
 
+    // MARK: - Video Toggle
+
+    /// Toggle Webex video by pressing the video button via Accessibility API.
+    func toggleVideo() {
+        // Try cached button first
+        if let button = cachedVideoButton {
+            let result = AXUIElementPerformAction(button, kAXPressAction as CFString)
+            if result == .success { return }
+            cachedVideoButton = nil
+        }
+
+        guard let pid = findWebexPID() else { return }
+
+        if let button = findVideoButtonInWindows(pid: pid) {
+            cachedVideoButton = button
+            let result = AXUIElementPerformAction(button, kAXPressAction as CFString)
+            if result == .success { return }
+        }
+
+        // Fallback: Cmd+Shift+V keystroke
+        let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: Config.videoShortcutKeyCode, keyDown: true)
+        let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: Config.videoShortcutKeyCode, keyDown: false)
+        keyDown?.flags = Config.videoShortcutModifiers
+        keyUp?.flags = Config.videoShortcutModifiers
+        keyDown?.postToPid(pid)
+        keyUp?.postToPid(pid)
+    }
+
     // MARK: - Polling
 
     private func schedulePoll(interval: TimeInterval) {
@@ -99,6 +140,19 @@ final class WebexMonitor {
         if newState != currentState {
             currentState = newState
             delegate?.webexMonitor(self, didDetectState: newState)
+        }
+
+        // Detect video state during active meetings
+        let newVideoState: WebexVideoState
+        switch newState {
+        case .muted, .unmuted:
+            newVideoState = detectVideoState()
+        default:
+            newVideoState = .unknown
+        }
+        if newVideoState != currentVideoState {
+            currentVideoState = newVideoState
+            delegate?.webexMonitor(self, didDetectVideoState: newVideoState)
         }
 
         // Adjust poll interval based on state
@@ -164,12 +218,7 @@ final class WebexMonitor {
 
     /// Read mute state from a cached button element (very fast — single AX call)
     private func readMuteState(from button: AXUIElement) -> WebexState? {
-        // Read the button's description which changes between "mute" and "unmute"
-        let desc = axDescription(of: button)
-        let title = axTitle(of: button)
-        let text = [desc, title].compactMap { $0 }.joined(separator: " ").lowercased()
-
-        // Check it's still a mute-related button
+        let text = combinedText(of: button)
         guard text.contains("mute") else { return nil }
 
         if text.contains("unmute") {
@@ -206,9 +255,7 @@ final class WebexMonitor {
         let role = axRole(of: element)
 
         if role == kAXButtonRole as String {
-            let desc = axDescription(of: element)
-            let title = axTitle(of: element)
-            let text = [desc, title].compactMap { $0 }.joined(separator: " ").lowercased()
+            let text = combinedText(of: element)
             if text.contains("answer") || text.contains("accept") || text.contains("decline") {
                 return true
             }
@@ -254,9 +301,7 @@ final class WebexMonitor {
         let role = axRole(of: element)
 
         if role == kAXButtonRole as String {
-            let desc = axDescription(of: element)
-            let title = axTitle(of: element)
-            let text = [desc, title].compactMap { $0 }.joined(separator: " ").lowercased()
+            let text = combinedText(of: element)
             if text.contains("unmute") || text.contains("mute") {
                 return element
             }
@@ -277,15 +322,109 @@ final class WebexMonitor {
         return nil
     }
 
+    // MARK: - Video State Detection
+
+    private func detectVideoState() -> WebexVideoState {
+        guard let pid = findWebexPID() else { return .unknown }
+
+        // Fast path: read cached video button
+        if let button = cachedVideoButton {
+            if let state = readVideoState(from: button) {
+                videoCacheFailCount = 0
+                return state
+            }
+            videoCacheFailCount += 1
+            if videoCacheFailCount > 2 {
+                cachedVideoButton = nil
+            }
+        }
+
+        // Slow path: find the video button
+        if let button = findVideoButtonInWindows(pid: pid) {
+            cachedVideoButton = button
+            videoCacheFailCount = 0
+            if let state = readVideoState(from: button) {
+                return state
+            }
+        }
+
+        return .unknown
+    }
+
+    /// Read video state from a button element
+    private func readVideoState(from button: AXUIElement) -> WebexVideoState? {
+        let text = combinedText(of: button)
+        guard text.contains("video") else { return nil }
+
+        if text.contains("start") {
+            return .videoOff
+        } else if text.contains("stop") {
+            return .videoOn
+        }
+        return nil
+    }
+
+    private func findVideoButtonInWindows(pid: pid_t) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(pid)
+
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let windows = windowsRef as? [AXUIElement] else {
+            return nil
+        }
+
+        for window in windows {
+            if let button = findVideoButtonElement(window, depth: 0) {
+                return button
+            }
+        }
+        return nil
+    }
+
+    private func findVideoButtonElement(_ element: AXUIElement, depth: Int) -> AXUIElement? {
+        guard depth < 10 else { return nil }
+
+        let role = axRole(of: element)
+
+        if role == kAXButtonRole as String {
+            let text = combinedText(of: element)
+            if text.contains("video") && (text.contains("start") || text.contains("stop")) {
+                return element
+            }
+        }
+
+        var childrenRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+              let children = childrenRef as? [AXUIElement] else {
+            return nil
+        }
+
+        for child in children {
+            if let button = findVideoButtonElement(child, depth: depth + 1) {
+                return button
+            }
+        }
+        return nil
+    }
+
     // MARK: - Cache Management
 
     private func invalidateCache() {
         cachedMuteButton = nil
+        cachedVideoButton = nil
         cachedWebexPID = nil
         cacheFailCount = 0
+        videoCacheFailCount = 0
     }
 
     // MARK: - Accessibility Helpers
+
+    /// Combined lowercase text of an element's description and title
+    private func combinedText(of element: AXUIElement) -> String {
+        let desc = axDescription(of: element)
+        let title = axTitle(of: element)
+        return [desc, title].compactMap { $0 }.joined(separator: " ").lowercased()
+    }
 
     private func axTitle(of element: AXUIElement) -> String? {
         var value: CFTypeRef?

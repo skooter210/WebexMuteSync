@@ -123,6 +123,11 @@ final class SyncEngine {
         webexMonitor.toggleVideo()
     }
 
+    /// Leave the current Webex meeting
+    func leaveWebexMeeting() {
+        webexMonitor.leaveCall()
+    }
+
     // MARK: - Status
 
     private func updateStatus() {

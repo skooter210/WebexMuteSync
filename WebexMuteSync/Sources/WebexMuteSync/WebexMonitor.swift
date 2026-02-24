@@ -125,6 +125,26 @@ final class WebexMonitor {
         keyUp?.postToPid(pid)
     }
 
+    // MARK: - Leave Call
+
+    /// Leave/end the current Webex meeting by pressing the leave button via Accessibility API.
+    func leaveCall() {
+        guard let pid = findWebexPID() else { return }
+
+        if let button = findLeaveButtonInWindows(pid: pid) {
+            let result = AXUIElementPerformAction(button, kAXPressAction as CFString)
+            if result == .success { return }
+        }
+
+        // Fallback: Cmd+L keystroke
+        let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: Config.leaveShortcutKeyCode, keyDown: true)
+        let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: Config.leaveShortcutKeyCode, keyDown: false)
+        keyDown?.flags = Config.leaveShortcutModifiers
+        keyUp?.flags = Config.leaveShortcutModifiers
+        keyDown?.postToPid(pid)
+        keyUp?.postToPid(pid)
+    }
+
     // MARK: - Polling
 
     private func schedulePoll(interval: TimeInterval) {
@@ -401,6 +421,51 @@ final class WebexMonitor {
 
         for child in children {
             if let button = findVideoButtonElement(child, depth: depth + 1) {
+                return button
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Leave Button Discovery
+
+    private func findLeaveButtonInWindows(pid: pid_t) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(pid)
+
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let windows = windowsRef as? [AXUIElement] else {
+            return nil
+        }
+
+        for window in windows {
+            if let button = findLeaveButtonElement(window, depth: 0) {
+                return button
+            }
+        }
+        return nil
+    }
+
+    private func findLeaveButtonElement(_ element: AXUIElement, depth: Int) -> AXUIElement? {
+        guard depth < 10 else { return nil }
+
+        let role = axRole(of: element)
+
+        if role == kAXButtonRole as String {
+            let text = combinedText(of: element)
+            if text.contains("leave") || text.contains("end meeting") {
+                return element
+            }
+        }
+
+        var childrenRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+              let children = childrenRef as? [AXUIElement] else {
+            return nil
+        }
+
+        for child in children {
+            if let button = findLeaveButtonElement(child, depth: depth + 1) {
                 return button
             }
         }

@@ -25,6 +25,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarController.onToggleVideo = { [weak self] in
             self?.syncEngine.toggleWebexVideo()
         }
+        menuBarController.onLeaveCall = { [weak self] in
+            self?.syncEngine.leaveWebexMeeting()
+        }
 
         // Wire "Configure Device..." menu item
         menuBarController.onConfigureDevice = { [weak self] in

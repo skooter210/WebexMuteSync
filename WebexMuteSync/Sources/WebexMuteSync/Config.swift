@@ -39,6 +39,10 @@ enum Config {
     static let videoShortcutKeyCode: CGKeyCode = 0x09  // 'V' key
     static let videoShortcutModifiers: CGEventFlags = [.maskCommand, .maskShift]
 
+    /// Keyboard shortcut to leave meeting in Webex: Cmd+L
+    static let leaveShortcutKeyCode: CGKeyCode = 0x25  // 'L' key
+    static let leaveShortcutModifiers: CGEventFlags = [.maskCommand]
+
     // MARK: - Accessibility Menu Path
 
     /// Menu bar path to the mute menu item in Webex

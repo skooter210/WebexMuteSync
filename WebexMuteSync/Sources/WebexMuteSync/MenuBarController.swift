@@ -124,17 +124,120 @@ private final class CircleToggleButton: NSView {
 
 // MARK: - Toggle Controls View
 
-/// Custom view for the menu item containing circular audio/video toggle buttons.
+/// A circular button styled for destructive actions (e.g. leave meeting).
+/// Always shows the same icon regardless of state — only toggles enabled/disabled.
+private final class CircleActionButton: NSView {
+    private let iconSize: CGFloat = 18
+    private let buttonSize: CGFloat = 36
+
+    private var symbol: String
+    private(set) var isEnabled: Bool = false
+    private var isPressed: Bool = false
+    private var clickHandler: (() -> Void)?
+
+    init(symbol: String, action: @escaping () -> Void) {
+        self.symbol = symbol
+        self.clickHandler = action
+        super.init(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
+
+        self.wantsLayer = true
+
+        translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: buttonSize),
+            heightAnchor.constraint(equalToConstant: buttonSize),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    func setEnabled(_ enabled: Bool) {
+        self.isEnabled = enabled
+        needsDisplay = true
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+
+        isPressed = true
+        needsDisplay = true
+
+        clickHandler?()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.isPressed = false
+            self?.needsDisplay = true
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {}
+
+    override func draw(_ dirtyRect: NSRect) {
+        let bounds = self.bounds
+        let path = NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1))
+
+        // Background circle — red-tinted when enabled
+        if isEnabled {
+            if isPressed {
+                NSColor.systemRed.withAlphaComponent(0.5).setFill()
+            } else {
+                NSColor.systemRed.withAlphaComponent(0.2).setFill()
+            }
+        } else {
+            NSColor.controlBackgroundColor.withAlphaComponent(0.1).setFill()
+        }
+        path.fill()
+
+        // Border
+        if isEnabled {
+            NSColor.systemRed.withAlphaComponent(0.4).setStroke()
+        } else {
+            NSColor.separatorColor.withAlphaComponent(0.3).setStroke()
+        }
+        path.lineWidth = 1
+        path.stroke()
+
+        // Icon
+        guard let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) else { return }
+
+        let config = NSImage.SymbolConfiguration(pointSize: iconSize, weight: .medium)
+        let configured = image.withSymbolConfiguration(config) ?? image
+
+        let tint: NSColor = isEnabled ? .systemRed : .tertiaryLabelColor
+
+        let tinted = NSImage(size: configured.size, flipped: false) { rect in
+            configured.draw(in: rect)
+            tint.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        tinted.isTemplate = false
+
+        let imageSize = tinted.size
+        let x = (bounds.width - imageSize.width) / 2
+        let y = (bounds.height - imageSize.height) / 2
+        tinted.draw(in: NSRect(x: x, y: y, width: imageSize.width, height: imageSize.height))
+    }
+}
+
+/// Custom view for the menu item containing circular audio/video toggle buttons and leave button.
 private final class ToggleControlsView: NSView {
     let audioButton: CircleToggleButton
     let videoButton: CircleToggleButton
+    let leaveButton: CircleActionButton
 
     private let audioLabel = NSTextField(labelWithString: "Mute")
     private let videoLabel = NSTextField(labelWithString: "Video")
+    private let leaveLabel = NSTextField(labelWithString: "Leave")
 
-    init(onToggleAudio: @escaping () -> Void, onToggleVideo: @escaping () -> Void) {
+    init(onToggleAudio: @escaping () -> Void, onToggleVideo: @escaping () -> Void, onLeaveCall: @escaping () -> Void) {
         audioButton = CircleToggleButton(onSymbol: "mic.fill", offSymbol: "mic.slash.fill", action: onToggleAudio)
         videoButton = CircleToggleButton(onSymbol: "video.fill", offSymbol: "video.slash.fill", action: onToggleVideo)
+        leaveButton = CircleActionButton(symbol: "phone.down.fill", action: onLeaveCall)
 
         super.init(frame: NSRect(x: 0, y: 0, width: 200, height: 60))
 
@@ -168,8 +271,18 @@ private final class ToggleControlsView: NSView {
         videoColumn.addArrangedSubview(videoButton)
         videoColumn.addArrangedSubview(videoLabel)
 
+        // Leave column
+        let leaveColumn = NSStackView()
+        leaveColumn.orientation = .vertical
+        leaveColumn.spacing = 2
+        leaveColumn.alignment = .centerX
+        configureLabel(leaveLabel)
+        leaveColumn.addArrangedSubview(leaveButton)
+        leaveColumn.addArrangedSubview(leaveLabel)
+
         stack.addArrangedSubview(audioColumn)
         stack.addArrangedSubview(videoColumn)
+        stack.addArrangedSubview(leaveColumn)
 
         addSubview(stack)
 
@@ -201,6 +314,11 @@ private final class ToggleControlsView: NSView {
         videoLabel.stringValue = isOn ? "Video" : "No Video"
         videoLabel.textColor = enabled ? .secondaryLabelColor : .tertiaryLabelColor
     }
+
+    func updateLeave(enabled: Bool) {
+        leaveButton.setEnabled(enabled)
+        leaveLabel.textColor = enabled ? .secondaryLabelColor : .tertiaryLabelColor
+    }
 }
 
 // MARK: - MenuBarController
@@ -231,6 +349,7 @@ final class MenuBarController {
     /// because NSMenu's event tracking mode blocks poll timers)
     private var lastAudioClickTime: Date = .distantPast
     private var lastVideoClickTime: Date = .distantPast
+    private var lastLeaveClickTime: Date = .distantPast
     private let actionCooldown: TimeInterval = 0.5
 
     /// Whether we're in the UI cooldown period after a button click
@@ -241,6 +360,7 @@ final class MenuBarController {
     /// Closures called when the user clicks toggle menu items
     var onToggleAudio: (() -> Void)?
     var onToggleVideo: (() -> Void)?
+    var onLeaveCall: (() -> Void)?
 
     /// Closure called when user clicks "Configure Device..."
     var onConfigureDevice: (() -> Void)?
@@ -316,6 +436,13 @@ final class MenuBarController {
                 self.optimisticVideoOff = willBeOff
                 self.toggleControlsView?.updateVideo(isOn: !willBeOff, enabled: true)
                 self.onToggleVideo?()
+            },
+            onLeaveCall: { [weak self] in
+                guard let self = self else { return }
+                let now = Date()
+                guard now.timeIntervalSince(self.lastLeaveClickTime) >= self.actionCooldown else { return }
+                self.lastLeaveClickTime = now
+                self.onLeaveCall?()
             }
         )
         toggleControlsItem = NSMenuItem()
@@ -433,6 +560,10 @@ final class MenuBarController {
 
         // Update circular toggle buttons (skip during UI cooldown to prevent poll overwrites)
         let inMeeting = (status == .muted || status == .unmuted)
+
+        // Leave button always reflects meeting state (no optimistic state needed)
+        toggleControlsView?.updateLeave(enabled: inMeeting)
+
         if !isInUICooldown {
             // Cooldown expired — clear optimistic state and sync from actual state
             optimisticMuted = nil

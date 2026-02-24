@@ -53,5 +53,5 @@ enum Config {
     // MARK: - GitHub
 
     /// GitHub repo for submitting device profiles as issues
-    static let githubRepoSlug = "cmoss1/WebexMuteSync"
+    static let githubRepoSlug = "skooter210/WebexMuteSync"
 }
